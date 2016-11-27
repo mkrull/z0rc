@@ -6,6 +6,7 @@ import "encoding/json"
 type NodeInfo struct {
 	FQDN string
 	Port int
+	Dead bool
 }
 
 // NodeInfoFromBytes unmarshalls the []byte into a NodeInfo and returns a reference

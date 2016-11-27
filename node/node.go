@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/mkrull/z0rc/registry"
 
@@ -20,30 +21,76 @@ import (
 
 var hostname = flag.String("hostname", "localhost", "hostname to be used to register the node")
 var port = flag.Int("port", 8001, "port to be used to run the node's interface")
-var discoverURL = flag.String("discover", "http://localhost:8000/discover", "discovery url to register node")
+var discoveryURL = flag.String("discover", "http://localhost:8000/discover", "discovery url to register node")
+var discoveryToken = flag.String("token", "", "token of the cluster to join")
 
 type node struct {
 	sync.Mutex
-	id      string
-	cluster registry.Register
+	discoveryBaseURL string
+	discoveryToken   string
+	cluster          *registry.Register
 }
 
-func (n *node) register() {
-	resp, err := http.Get(*discoverURL + "/new")
+func (n *node) heartbeat() {
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			for _, c := range n.cluster.Nodes {
+				if c.FQDN == *hostname && c.Port == *port {
+					continue
+				}
+
+				st := struct {
+					FQDN string
+					Port int
+				}{
+					FQDN: *hostname,
+					Port: *port,
+				}
+				info, err := json.Marshal(st)
+
+				if err != nil {
+					log.Println(err)
+					os.Exit(1)
+				}
+
+				buff := bytes.NewBuffer(info)
+				log.Println("payload send", buff.String())
+				resp, err := http.Post("http://"+c.FQDN+":"+strconv.Itoa(c.Port)+"/heartbeat", "application/json", buff)
+				if err != nil {
+					log.Println("Error:", err)
+					c.Dead = true
+					continue
+				}
+				c.Dead = false
+				payload, err := ioutil.ReadAll(resp.Body)
+				log.Println("payload receive", string(payload))
+			}
+		}
+	}()
+}
+
+func (n *node) newToken() {
+	resp, err := http.Get(n.discoveryBaseURL + "/new")
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
-
 	id, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
 
-	log.Println("Id: ", string(id))
+	log.Println("Token: ", string(id))
 
-	n.id = string(id)
+	n.discoveryToken = string(id)
+}
+
+func (n *node) register() {
+	if n.discoveryToken == "" {
+		n.newToken()
+	}
 
 	nodeInfo := registry.NodeInfo{
 		FQDN: *hostname,
@@ -54,9 +101,9 @@ func (n *node) register() {
 
 	buff := bytes.NewBufferString(string(nodeBytes))
 
-	log.Println(*discoverURL + "/" + n.id + "/" + "register")
+	log.Println(n.discoveryBaseURL + "/" + n.discoveryToken + "/" + "register")
 
-	resp, err = http.Post(*discoverURL+"/"+n.id+"/"+"register", "application/json", buff)
+	resp, err := http.Post(n.discoveryBaseURL+"/"+n.discoveryToken+"/"+"register", "application/json", buff)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
@@ -69,15 +116,48 @@ func (n *node) register() {
 	}
 
 	log.Println("Res: ", string(res))
+
+	register, err := registry.RegisterFromBytes(res)
+	if err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+
+	n.cluster = register
 }
 
 var nodeInfo *node
 
 func init() {
 	flag.Parse()
-	nodeInfo = &node{}
+	nodeInfo = &node{
+		discoveryBaseURL: *discoveryURL,
+		discoveryToken:   *discoveryToken,
+	}
 
 	nodeInfo.register()
+	nodeInfo.heartbeat()
+}
+
+func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	payload, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Println("Error", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	log.Println("Heartbeat:", string(payload))
+
+	st := struct {
+		FQDN string
+		Port int
+	}{
+		FQDN: *hostname,
+		Port: *port,
+	}
+	info, err := json.Marshal(st)
+
+	fmt.Fprint(w, string(info))
 }
 
 func replicationHandler(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +168,7 @@ func replicationHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	mux := goji.NewMux()
 	mux.HandleFunc(pat.Post("/replicate/:uuid"), replicationHandler)
+	mux.HandleFunc(pat.Post("/heartbeat"), heartbeatHandler)
 
 	log.Println(*hostname + ":" + strconv.Itoa(*port))
 	http.ListenAndServe(*hostname+":"+strconv.Itoa(*port), mux)

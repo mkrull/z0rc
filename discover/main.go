@@ -70,6 +70,8 @@ func registerToDiscoveryGroup(w http.ResponseWriter, r *http.Request) {
 		}
 
 		storage.Put(u, b)
+
+		fmt.Fprint(w, string(b))
 	} else {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 	}
