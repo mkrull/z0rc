@@ -23,6 +23,7 @@ var hostname = flag.String("hostname", "localhost", "hostname to be used to regi
 var port = flag.Int("port", 8001, "port to be used to run the node's interface")
 var discoveryURL = flag.String("discover", "http://localhost:8000/discover", "discovery url to register node")
 var discoveryToken = flag.String("token", "", "token of the cluster to join")
+var pidFile = flag.String("pidfile", "", "PID file. No pid file created if empty")
 
 type node struct {
 	sync.Mutex
@@ -137,6 +138,19 @@ func init() {
 
 	nodeInfo.register()
 	nodeInfo.heartbeat()
+
+	writePid()
+}
+
+func writePid() {
+	if *pidFile != "" {
+		pid := os.Getpid()
+		err := ioutil.WriteFile(*pidFile, []byte(strconv.Itoa(pid)), 0444)
+		if err != nil {
+			log.Println(err)
+			os.Exit(1)
+		}
+	}
 }
 
 func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
@@ -171,5 +185,9 @@ func main() {
 	mux.HandleFunc(pat.Post("/heartbeat"), heartbeatHandler)
 
 	log.Println(*hostname + ":" + strconv.Itoa(*port))
-	http.ListenAndServe(*hostname+":"+strconv.Itoa(*port), mux)
+	err := http.ListenAndServe(*hostname+":"+strconv.Itoa(*port), mux)
+	if err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
 }

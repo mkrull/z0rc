@@ -1,9 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/mkrull/z0rc/registry"
 	"github.com/nu7hatch/gouuid"
@@ -13,9 +17,23 @@ import (
 )
 
 var storage StorageBackend
+var pidFile = flag.String("pidfile", "", "PID file. No pid file created if empty")
 
 func init() {
 	storage = NewInMemoryStore()
+	flag.Parse()
+	writePid()
+}
+
+func writePid() {
+	if *pidFile != "" {
+		pid := os.Getpid()
+		err := ioutil.WriteFile(*pidFile, []byte(strconv.Itoa(pid)), 0444)
+		if err != nil {
+			log.Println(err)
+			os.Exit(1)
+		}
+	}
 }
 
 func newDiscoveryGroup(w http.ResponseWriter, r *http.Request) {
